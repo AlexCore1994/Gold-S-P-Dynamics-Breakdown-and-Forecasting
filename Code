@@ -1,0 +1,240 @@
+#Importing libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.impute import SimpleImputer
+import warnings
+warnings.filterwarnings('ignore')
+from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBClassifier
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.model_selection import train_test_split, GridSearchCV
+import tensorflow as tf
+import plotly.express as px
+from IPython.core.display import display, HTML
+from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
+
+!pip install kaggle
+
+from google.colab import files
+files.upload()
+
+!mkdir -p ~/.kaggle
+!cp kaggle.json ~/.kaggle/
+!chmod 600 ~/.kaggle/kaggle.json
+
+!pip install opendatasets
+
+import opendatasets as od
+od.download("https://www.kaggle.com/datasets/franciscogcc/financial-data/data")
+
+file_path = '/content/financial-data/financial_regression.csv'
+df = pd.read_csv(file_path)
+df.head()
+
+df['date'] = pd.to_datetime(df['date'])
+df.info()
+
+df.isnull().sum()
+
+df = pd.read_csv('/content/financial-data/financial_regression.csv', parse_dates=['date'], index_col='date')
+
+ma_size = 20  # The period of the moving average
+num_std_dev = 2  # Number of standard deviations
+bol_size=50  # the width of the corridor is selected according to the schedule.
+
+df['SMA'] = df['sp500 close'].rolling(ma_size).mean()
+df['STD'] = df['sp500 close'].rolling(window=ma_size).std()
+SMA = df['sp500 close'].rolling(ma_size).mean()
+BB_UP = SMA + df['sp500 close'].rolling(ma_size).std() * bol_size
+BB_DOWN = SMA - df['sp500 close'].rolling(ma_size).std() * bol_size
+df['sp500 high'] = df['SMA'] + (df['STD'] * num_std_dev)
+df['sp500 low'] = df['SMA'] - (df['STD'] * num_std_dev)
+
+plt.figure(figsize=(14, 7))
+plt.plot(df.index, df['sp500 open'], label='SMA', color='orange')
+plt.plot(df.index, df['sp500 high'], label='Верхняя полоса', color='green')
+plt.plot(df.index, df['sp500 low'], label='Нижняя полоса', color='red')
+plt.plot(df.index, df['sp500 close'], label='Акции золота', color='red')
+plt.title('Bollinger bands regression of gold prices')
+plt.xlabel('Дата')
+plt.ylabel('Цена')
+plt.legend()
+plt.show()
+
+# We create buy and sell signals.
+df['Buy Signal'] = (df['sp500 close'] < df['sp500 low'])
+df['Sales signal'] = (df['sp500 close'] > df['sp500 high'])
+
+# Visualize the data
+plt.figure(figsize=(14, 7))
+plt.plot(df.index, df['sp500 open'], label='SMA', color='orange')
+plt.plot(df.index, df['sp500 close'], label='Акции', color='blue')
+plt.plot(df.index, df['sp500 high'], label='Верхняя полоса', color='red', linestyle='--')
+plt.plot(df.index, df['sp500 low'], label='Нижняя полоса', color='green', linestyle='--')
+plt.scatter(df.index[df['Buy Signal']], df['sp500 close'][df['Buy Signal']], label='Buy Signal', marker='^', color='green', s=100)
+plt.scatter(df.index[df['Sales signal']], df['sp500 close'][df['Sales signal']], label='Sales signal', marker='v', color='red', s=100)
+
+# Note the signals on the chart and show the stock trading chart.
+plt.scatter(df.index[df['Buy Signal']], df['sp500 close'][df['Buy Signal']], label='Buy Signal', marker='^', color='green', s=100)
+plt.scatter(df.index[df['Sales signal']], df['sp500 close'][df['Sales signal']], label='Sales signal', marker='v', color='red', s=100)
+
+plt.title('Gold Trading Strategy')
+plt.xlabel('date')
+plt.ylabel('Price')
+plt.legend()
+plt.show()
+
+if 'high-low' not in df.columns:
+    df['high-low'] = df['sp500 high'] - df['sp500 low']
+
+df['next_day_close'] = df['sp500 close'].shift(-1)
+df = df.dropna(subset=['next_day_close'])
+features = ['sp500 open', 'sp500 high', 'sp500 low', 'sp500 volume', 'high-low']
+target = 'next_day_close'
+imputer = SimpleImputer(strategy='mean')
+
+X = df[features]
+y = df[target]
+
+X_imputed = imputer.fit_transform(X)  
+y_imputed = imputer.fit_transform(y.values.reshape(-1, 1))  
+
+# We separate the training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X_imputed, y_imputed, test_size=0.2, random_state=42)
+
+# Let's introduce the model (Ridge or Lasso)
+model = Ridge()  # You can replace Ridge with Lasso or linear regression
+
+# Setting up a grid of parameters
+param_grid = {
+    'alpha': [0.1, 1, 10, 100],
+}
+
+# We incise GridSearchCV
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=5, scoring='neg_mean_squared_error')
+
+# Let's perform a grid search
+grid_search.fit(X_train, y_train)
+
+# We output the best parameters and results
+print("Best Hyperparameters:", grid_search.best_params_)
+print("Best Cross-Validation Score (MSE):", -grid_search.best_score_)
+
+# Finding the best model from the grid search list
+best_model = grid_search.best_estimator_
+
+# Making predictions
+y_pred = best_model.predict(X_test)
+
+# Evaluating the model
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+# Showing the evaluation results
+print(f"Mean Squared Error (MSE): {mse}")
+print(f"R-squared (R2): {r2}")
+
+#Gold stocks and prices dynamics
+def convert_date(x):
+    date = datetime.strptime(x, "%Y-%m-%d")
+    return [date.month, date.year]
+months = ["January", "February", "March", "April",
+         "May", "June", "July", "August",
+         "September", "October", "November", "December"]
+
+df["Year"] = df["date"].apply(lambda x: convert_date(x)[1])
+df["Month"] = df["date"].apply(lambda x: convert_date(x)[0])
+
+nums = df.columns[1:5].tolist()
+years = df["Year"].unique()
+
+for i in sorted(years):
+    display(HTML("<h2>Monthly average stock prices for {}</h2>".format(i)))
+    temp_df = df[df["Year"] == i]
+    fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(10, 7))
+    grouped = temp_df.groupby("Month")
+    for k, j in enumerate(nums):
+        mean = pd.DataFrame(grouped[j].mean())
+        mean = mean.sort_index(ascending=True)
+        dd = {"month": [], j: []}
+        for l in range(mean.shape[0]):
+            dd["month"] += [months[mean.index[l]-1]]
+            dd[j] += [mean.iloc[l, 0]]
+        dd = pd.DataFrame(dd)
+        sns.barplot(x=dd.iloc[:, 0].values, y=dd.iloc[:, 1].values, ax=axes[k])
+        for container in axes[k].containers:
+            axes[k].bar_label(container, label_type="center", rotation=90)
+        axes[k].set_xticklabels(axes[k].get_xticklabels(), rotation=90)
+        axes[k].set_title(j)
+        axes[k].set_ylabel("")
+        axes[k].set_xlabel("months")
+        axes[k].set_yticklabels(())
+    plt.tight_layout()
+    plt.show()
+
+#Data preprocessing
+data = df[nums].copy()
+cols = data.columns
+for i in cols:
+    dname = "Target "+i
+    data[dname] = data[i].shift(-1)    
+data.dropna(inplace=True)
+sc = MinMaxScaler()
+scaled = sc.fit_transform(data.values)
+x = []
+backcandles = 1
+for j in range(4):
+    x.append([])
+    for i in range(backcandles, scaled.shape[0]):
+        x[j].append(scaled[i-backcandles:i, j])
+x = np.moveaxis(x, [0], [2])
+x, yi = np.array(x), np.array(scaled[backcandles:, -4:])
+y = np.reshape(yi, (len(yi), 4))
+split = int(len(x)*0.8)
+x_train, x_test = x[:split], x[split:]
+y_train, y_test = y[:split], y[split:]
+
+#Forecasting model architecture
+lstm_input = tf.keras.layers.Input(shape=(backcandles, 4), name="lstm_input")
+inputs = tf.keras.layers.LSTM(150, name="first_layer")(lstm_input)
+inputs = tf.keras.layers.Dense(4, name="dense_layer", activation="linear")(inputs)
+model = tf.keras.models.Model(inputs=lstm_input, outputs=inputs)
+adam = tf.keras.optimizers.Adam()
+model.compile(optimizer=adam, loss="mse")
+model.summary()
+
+history = model.fit(x=x_train, y=y_train, batch_size=16, epochs=15, validation_split=0.1)
+
+plt.plot(history.history["loss"], label="Training loss")
+plt.plot(history.history["val_loss"], label="Validation loss")
+plt.legend()
+plt.title("Loss log")
+plt.show()
+
+#Visual inspection of test results
+y_pred = model.predict(x_test)
+
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print("MSE: ", mse)
+print("r2: ", r2)
+
+fig, axes = plt.subplots(nrows=1, ncols=4, figsize=(10, 7))
+for i in range(4):
+    axes[i].plot(y_test[:, i], label="Real data")
+    axes[i].plot(y_pred[:, i], label="Predicted data")
+    axes[i].legend()
+    axes[i].set_title(nums[i])
+plt.tight_layout()
+plt.show()
